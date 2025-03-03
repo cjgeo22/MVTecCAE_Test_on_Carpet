@@ -1,11 +1,4 @@
-"""
-Created on Tue Dec 10 19:46:17 2019
 
-@author: Adnene Boumessouer
-autoencoder.py - AutoEncoder class with the mvtecCAE architecture,
-hard-coded to use mssim loss. Avoids dictionary-based history lookups
-and saves the model in TensorFlow's native format to remove HDF5 warnings.
-"""
 
 import os
 import datetime
