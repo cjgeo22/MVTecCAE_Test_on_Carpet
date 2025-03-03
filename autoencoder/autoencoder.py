@@ -2,175 +2,121 @@
 Created on Tue Dec 10 19:46:17 2019
 
 @author: Adnene Boumessouer
+autoencoder.py - AutoEncoder class with the mvtecCAE architecture,
+hard-coded to use mssim loss. Avoids dictionary-based history lookups
+and saves the model in TensorFlow's native format to remove HDF5 warnings.
 """
-import sys
+
 import os
-import shutil
 import datetime
 import json
-from pathlib import Path
+import logging
 
 import tensorflow as tf
 from tensorflow import keras
 import ktrain
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# Model, metrics, and losses
 from autoencoder.models import mvtecCAE
-from autoencoder.models import baselineCAE
-from autoencoder.models import inceptionCAE
-from autoencoder.models import resnetCAE
 from autoencoder import metrics
 from autoencoder import losses
-import logging
+
+# Configuration file for LR and callbacks (assumes you have config.py)
+import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 class AutoEncoder:
-    def __init__(
-        self,
-        input_directory,
-        architecture,
-        color_mode,
-        loss,
-        batch_size=8,
-        verbose=True,
-    ):
-        # path attrivutes
+    def __init__(self, input_directory, architecture, color_mode, batch_size=8, verbose=True):
         self.input_directory = input_directory
         self.save_dir = None
         self.log_dir = None
 
-        # model and data attributes
+        if architecture != "mvtecCAE":
+            raise ValueError("Only 'mvtecCAE' architecture is supported.")
         self.architecture = architecture
+
         self.color_mode = color_mode
-        self.loss = loss
+        self.loss = "mssim"  # Hard-coded for mssim
         self.batch_size = batch_size
 
-        # learning rate finder attributes
-        self.opt_lr = None
-        self.opt_lr_i = None
-        self.base_lr = None
-        self.base_lr_i = None
+        # Attributes for LR finder
+        self.lr_opt = None
+        self.lr_opt_i = None
+        self.lr_base = None
+        self.lr_base_i = None
+        self.lr_mg_i = None
+        self.lr_mg = None
+        self.lr_ml_10_i = None
+        self.lr_ml_10 = None
 
-        # training attributes
+        # Training state
         self.learner = None
-
-        # results attributes
         self.hist = None
-        self.epochs_trained = None
 
-        # build model and preprocessing variables
-        if architecture == "mvtecCAE":
-            # Preprocessing parameters
-            self.model = mvtecCAE.build_model(color_mode)
-            self.rescale = mvtecCAE.RESCALE
-            self.shape = mvtecCAE.SHAPE
-            self.preprocessing_function = mvtecCAE.PREPROCESSING_FUNCTION
-            self.preprocessing = mvtecCAE.PREPROCESSING
-            self.vmin = mvtecCAE.VMIN
-            self.vmax = mvtecCAE.VMAX
-            self.dynamic_range = mvtecCAE.DYNAMIC_RANGE
-            # Learning Rate Finder parameters
-            self.start_lr = mvtecCAE.START_LR
-            self.lr_max_epochs = mvtecCAE.LR_MAX_EPOCHS
-            self.lrf_decrease_factor = mvtecCAE.LRF_DECREASE_FACTOR
-            # Training parameters
-            self.early_stopping = mvtecCAE.EARLY_STOPPING
-            self.reduce_on_plateau = mvtecCAE.REDUCE_ON_PLATEAU
+        # Build the mvtecCAE model
+        self.model = mvtecCAE.build_model(color_mode)
+        self.rescale = mvtecCAE.RESCALE
+        self.shape = mvtecCAE.SHAPE
+        self.preprocessing_function = mvtecCAE.PREPROCESSING_FUNCTION
+        self.preprocessing = mvtecCAE.PREPROCESSING
+        self.vmin = mvtecCAE.VMIN
+        self.vmax = mvtecCAE.VMAX
+        self.dynamic_range = mvtecCAE.DYNAMIC_RANGE
 
-        elif architecture == "baselineCAE":
-            # Preprocessing parameters
-            self.model = baselineCAE.build_model(color_mode)
-            self.rescale = baselineCAE.RESCALE
-            self.shape = baselineCAE.SHAPE
-            self.preprocessing_function = baselineCAE.PREPROCESSING_FUNCTION
-            self.preprocessing = baselineCAE.PREPROCESSING
-            self.vmin = baselineCAE.VMIN
-            self.vmax = baselineCAE.VMAX
-            self.dynamic_range = baselineCAE.DYNAMIC_RANGE
-            # Learning Rate Finder parameters
-            self.start_lr = baselineCAE.START_LR
-            self.lr_max_epochs = baselineCAE.LR_MAX_EPOCHS
-            self.lrf_decrease_factor = baselineCAE.LRF_DECREASE_FACTOR
-            # Training parameters
-            self.early_stopping = baselineCAE.EARLY_STOPPING
-            self.reduce_on_plateau = baselineCAE.REDUCE_ON_PLATEAU
+        # Load config parameters for LR finder and callbacks
+        self.start_lr = config.START_LR
+        self.lr_max_epochs = config.LR_MAX_EPOCHS
+        self.lrf_decrease_factor = config.LRF_DECREASE_FACTOR
+        self.early_stopping = config.EARLY_STOPPING
+        self.reduce_on_plateau = config.REDUCE_ON_PLATEAU
 
-        elif architecture == "inceptionCAE":
-            # Preprocessing parameters
-            self.model = inceptionCAE.build_model(color_mode)
-            self.rescale = inceptionCAE.RESCALE
-            self.shape = inceptionCAE.SHAPE
-            self.preprocessing_function = inceptionCAE.PREPROCESSING_FUNCTION
-            self.preprocessing = inceptionCAE.PREPROCESSING
-            self.vmin = inceptionCAE.VMIN
-            self.vmax = inceptionCAE.VMAX
-            self.dynamic_range = inceptionCAE.DYNAMIC_RANGE
-            # Learning Rate Finder parameters
-            self.start_lr = inceptionCAE.START_LR
-            self.lr_max_epochs = inceptionCAE.LR_MAX_EPOCHS
-            self.lrf_decrease_factor = inceptionCAE.LRF_DECREASE_FACTOR
-            # Training parameters
-            self.early_stopping = inceptionCAE.EARLY_STOPPING
-            self.reduce_on_plateau = inceptionCAE.REDUCE_ON_PLATEAU
-
-        elif architecture == "resnetCAE":
-            # Preprocessing parameters
-            self.model = resnetCAE.build_model(color_mode)
-            self.rescale = resnetCAE.RESCALE
-            self.shape = resnetCAE.SHAPE
-            self.preprocessing_function = resnetCAE.PREPROCESSING_FUNCTION
-            self.preprocessing = resnetCAE.PREPROCESSING
-            self.vmin = resnetCAE.VMIN
-            self.vmax = resnetCAE.VMAX
-            self.dynamic_range = resnetCAE.DYNAMIC_RANGE
-            # Learning Rate Finder parameters
-            self.start_lr = resnetCAE.START_LR
-            self.lr_max_epochs = resnetCAE.LR_MAX_EPOCHS
-            self.lrf_decrease_factor = resnetCAE.LRF_DECREASE_FACTOR
-            # Training parameters
-            self.early_stopping = resnetCAE.EARLY_STOPPING
-            self.reduce_on_plateau = resnetCAE.REDUCE_ON_PLATEAU
-
-        # verbosity
         self.verbose = verbose
         if verbose:
             self.model.summary()
 
-        # set loss function
-        if loss == "ssim":
-            self.loss_function = losses.ssim_loss(self.dynamic_range)
-        elif loss == "mssim":
-            self.loss_function = losses.mssim_loss(self.dynamic_range)
-        elif loss == "l2":
-            self.loss_function = losses.l2_loss
+        # Always use mssim loss
+        self.loss_function = losses.mssim_loss(self.dynamic_range)
+        self.metrics = [metrics.mssim_metric(self.dynamic_range)]
 
-        # set metrics to monitor training
-        if color_mode == "grayscale":
-            self.metrics = [metrics.ssim_metric(self.dynamic_range)]
-            self.hist_keys = ("loss", "val_loss", "ssim", "val_ssim")
-        elif color_mode == "rgb":
-            self.metrics = [metrics.mssim_metric(self.dynamic_range)]
-            self.hist_keys = ("loss", "val_loss", "mssim", "val_mssim")
-
-        # create directory to save model and logs
+        # Create directories for saving the model/logs
         self.create_save_dir()
 
-        # compile model
+        # Compile the model with Adam
         self.model.compile(
-            loss=self.loss_function, optimizer="adam", metrics=self.metrics
+            loss=self.loss_function,
+            optimizer="adam",
+            metrics=self.metrics
         )
-        return
 
-    ### Methods for training =================================================
+    def create_save_dir(self):
+        now = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        save_dir = os.path.join(
+            os.getcwd(),
+            "saved_models",
+            self.input_directory,
+            self.architecture,
+            self.loss,
+            now
+        )
+        os.makedirs(save_dir, exist_ok=True)
+        self.save_dir = save_dir
 
-    def find_opt_lr(self, train_generator, validation_generator):
-        # initialize learner object
+        log_dir = os.path.join(save_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_dir = log_dir
+
+    def create_model_name(self):
+        # We'll remove the .hdf5 extension to avoid HDF5 warnings
+        # and save in the TF native format
+        best_epoch = self.get_best_epoch()
+        return f"{self.architecture}_b{self.batch_size}_e{best_epoch}"
+
+    def find_lr_opt(self, train_generator, validation_generator):
         self.learner = ktrain.get_learner(
             model=self.model,
             train_data=train_generator,
@@ -178,9 +124,7 @@ class AutoEncoder:
             batch_size=self.batch_size,
         )
 
-        # simulate training while recording learning rate and loss
-        logger.info("initiating learning rate finder to determine best learning rate.")
-
+        logger.info("Initiating learning rate finder to determine best learning rate.")
         self.learner.lr_find(
             start_lr=self.start_lr,
             lr_mult=1.01,
@@ -188,55 +132,75 @@ class AutoEncoder:
             stop_factor=6,
             verbose=self.verbose,
             show_plot=True,
+            restore_weights_only=True,
         )
+        self.ktrain_lr_estimate()
+        self.custom_lr_estimate()
+        self.lr_find_plot(n_skip_beginning=10, n_skip_end=1, save=True)
 
-        # getting ktrain's opt_lr estimation
-        # self.lr_mg, self.lr_ml = self.learner.lr_estimate()
-
-        # using custom lr_opt estimation
+    def ktrain_lr_estimate(self):
+        # ktrain's built-in metrics
         losses = np.array(self.learner.lr_finder.losses)
         lrs = np.array(self.learner.lr_finder.lrs)
+        self.ml_i = self.learner.lr_finder.ml
+        self.lr_ml_10 = lrs[self.ml_i] / 10
+        logger.info(f"lr with minimum loss / 10: {self.lr_ml_10:.2E}")
 
-        # find optimal learning rate
+        try:
+            min_loss_i = np.argmin(losses)
+            self.lr_ml_10_i = np.argwhere(lrs[:min_loss_i] > self.lr_ml_10)[0][0]
+        except Exception:
+            self.lr_ml_10_i = None
+
+        self.lr_mg_i = self.learner.lr_finder.mg
+        if self.lr_mg_i is not None:
+            self.lr_mg = lrs[self.lr_mg_i]
+            logger.info(f"lr with minimum numerical gradient: {self.lr_mg:.2E}")
+
+    def custom_lr_estimate(self):
+        # Custom method to pick a learning rate
+        losses = np.array(self.learner.lr_finder.losses)
+        lrs = np.array(self.learner.lr_finder.lrs)
         min_loss = np.amin(losses)
         min_loss_i = np.argmin(losses)
-
-        # retrieve segment containing decreasing losses
         segment = losses[: min_loss_i + 1]
         max_loss = np.amax(segment)
 
-        # compute optimal loss
         optimal_loss = max_loss - self.lrf_decrease_factor * (max_loss - min_loss)
+        indices = np.argwhere(segment < optimal_loss)
+        if len(indices) == 0:
+            self.lr_opt_i = min_loss_i
+            self.lr_opt = float(lrs[self.lr_opt_i])
+            logger.warning("No losses found below 'optimal_loss'; falling back to min_loss_i.")
+        else:
+            self.lr_opt_i = indices[0][0]
+            self.lr_opt = float(lrs[self.lr_opt_i])
 
-        # get index corresponding to optimal loss
-        self.opt_lr_i = np.argwhere(segment < optimal_loss)[0][0]
+        base_indices = np.argwhere(lrs[:min_loss_i] > self.lr_opt / 10)
+        if len(base_indices) == 0:
+            self.lr_base_i = 0
+            logger.warning("No learning rates found above (lr_opt/10); falling back to index 0.")
+        else:
+            self.lr_base_i = base_indices[0][0]
 
-        # get optimal learning rate
-        self.opt_lr = float(lrs[self.opt_lr_i])
+        self.lr_base = float(lrs[self.lr_base_i])
+        logger.info(f"custom base learning rate: {self.lr_base:.2E}")
+        logger.info(f"custom optimal learning rate: {self.lr_opt:.2E}")
+        logger.info("Learning rate finder complete.")
 
-        # get base learning rate
-        self.base_lr = self.opt_lr / 10
-        self.base_lr_i = np.argwhere(lrs[:min_loss_i] > self.base_lr)[0][0]
-        logger.info("learning rate finder complete.")
-        self.lr_find_plot(save=True)
-        return
-
-    def fit(self):
-        # create tensorboard callback to monitor training
+    def fit(self, lr_opt):
         tensorboard_cb = keras.callbacks.TensorBoard(
-            log_dir=self.log_dir, write_graph=True, update_freq="epoch"
+            log_dir=self.log_dir,
+            write_graph=True,
+            update_freq="epoch"
         )
-        # Print command to paste in browser for visualizing in Tensorboard
-        logger.info(
-            "run the following command in a seperate terminal to monitor training on tensorboard:\ntensorboard --logdir={}\n".format(
-                self.log_dir
-            )
-        )
+        logger.info("Run 'tensorboard --logdir=%s' in a separate terminal to monitor training." % self.log_dir)
+        assert self.learner.model is self.model
 
-        # fit model using Cyclical Learning Rates
+        # ktrain's autofit with cyclical LR
         self.hist = self.learner.autofit(
-            lr=self.opt_lr,
-            epochs=None,
+            lr=lr_opt,
+            epochs=5,
             early_stopping=self.early_stopping,
             reduce_on_plateau=self.reduce_on_plateau,
             reduce_factor=2,
@@ -248,182 +212,83 @@ class AutoEncoder:
             verbose=self.verbose,
             callbacks=[tensorboard_cb],
         )
-        return
-
-    ### Methods to create directory structure and save (and load?) model =================
-
-    def create_save_dir(self):
-        # create a directory to save model
-        now = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-        save_dir = os.path.join(
-            os.getcwd(),
-            "saved_models",
-            self.input_directory,
-            self.architecture,
-            self.loss,
-            now,
-        )
-        if not os.path.isdir(save_dir):
-            os.makedirs(save_dir)
-        self.save_dir = save_dir
-        # create a log directory for tensorboard
-        log_dir = os.path.join(save_dir, "logs")
-        if not os.path.isdir(log_dir):
-            os.makedirs(log_dir)
-        self.log_dir = log_dir
-        return
-
-    def create_model_name(self):
-        epochs_trained = self.get_best_epoch()
-        model_name = self.architecture + "_b{}_e{}.hdf5".format(
-            self.batch_size, epochs_trained
-        )
-        return model_name
 
     def save(self):
-        # save model
-        self.model.save(os.path.join(self.save_dir, self.create_model_name()))
-        # save trainnig info
-        info = self.get_info()
-        with open(os.path.join(self.save_dir, "info.json"), "w") as json_file:
-            json.dump(info, json_file, indent=4, sort_keys=False)
-        # save training plots
+        # 1) Show all keys in self.hist.history
+        logger.info(f"All history keys: {list(self.hist.history.keys())}")
+
+        # 2) Save the model in TF's native format
+        model_path = os.path.join(self.save_dir, self.create_model_name())
+        self.model.save(model_path, save_format="tf")
+        logger.info(f"Model saved to {model_path}")
+
+        # 3) Save training plots
         self.loss_plot(save=True)
         self.lr_schedule_plot(save=True)
-        # save training history
-        hist_dict = self.get_history_dict()
-        hist_df = pd.DataFrame(hist_dict)
+
+        # 4) Save the history as CSV
+        hist_df = pd.DataFrame(self.hist.history)
         hist_csv_file = os.path.join(self.save_dir, "history.csv")
-        with open(hist_csv_file, mode="w") as csv_file:
-            hist_df.to_csv(csv_file)
-        logger.info("training history has been successfully saved as csv file.")
-        logger.info(
-            "training files have been successfully saved at: \n{}".format(self.save_dir)
-        )
-        return
-
-    ### Methods for getting finished training process info =====================
-
-    def get_history_dict(self):
-        hist_dict = dict((key, self.hist.history[key]) for key in self.hist_keys)
-        return hist_dict
-
-    def get_info(self):
-        info = {
-            "data": {
-                "input_directory": self.input_directory,
-                "nb_training_images": self.learner.train_data.samples,
-                "nb_validation_images": self.learner.val_data.samples,
-                "validation_split": self.learner.train_data.image_data_generator._validation_split,
-            },
-            "model": {"architecture": self.architecture, "loss": self.loss,},
-            "preprocessing": {
-                "color_mode": self.color_mode,
-                "rescale": self.rescale,
-                "shape": self.shape,
-                "vmin": self.vmin,
-                "vmax": self.vmax,
-                "dynamic_range": self.dynamic_range,
-                "preprocessing": self.preprocessing,
-            },
-            "lr_finder": {"base_lr": self.base_lr, "opt_lr": self.opt_lr,},
-            "training": {
-                "batch_size": self.batch_size,
-                "epochs_trained": self.get_best_epoch(),
-                "nb_train_images_total": self.get_total_nb_training_images(),
-            },
-        }
-        return info
+        hist_df.to_csv(hist_csv_file, index=False)
+        logger.info("Training history saved as CSV file.")
+        logger.info(f"Training files saved at: {self.save_dir}")
 
     def get_best_epoch(self):
         """
-        Returns the index of the epoch when the model had stopped training.
-        This epoch corresponds to the lowest validation loss registered
-        during training because of the use of Early Stopping Callback.
+        Return the epoch index with the lowest val_loss.
+        If no val_loss is found, returns 0.
         """
-        hist_dict = self.get_history_dict()
-        best_epoch = int(np.argmin(np.array(hist_dict["val_loss"])))
+        if "val_loss" not in self.hist.history:
+            logger.warning("No 'val_loss' found in history; returning 0 as best epoch.")
+            return 0
+        best_epoch = int(np.argmin(np.array(self.hist.history["val_loss"])))
         return best_epoch
 
-    def get_best_val_loss(self):
+    def lr_find_plot(self, n_skip_beginning=10, n_skip_end=1, save=False):
         """
-        Returns the (lowest) validation loss corresponding to the best epoch.
+        Plot the loss vs. learning rate from the LR finder.
         """
-        hist_dict = self.get_history_dict()
-        epochs_trained = np.argmin(np.array(hist_dict["val_loss"]))
-        best_val_loss = np.array(hist_dict["val_loss"])[epochs_trained]
-        return best_val_loss
-
-    def get_total_nb_training_images(self):
-        epochs_trained = self.get_best_epoch()
-        total_nb = int(epochs_trained * self.learner.train_data.samples)
-        return total_nb
-
-    ### Methods for plotting ============================================
-
-    def lr_find_plot(self, save=False):
         losses = np.array(self.learner.lr_finder.losses)
         lrs = np.array(self.learner.lr_finder.lrs)
-        # mg = self.learner.lr_finder.mg
-        # ml = self.learner.lr_finder.ml
-        # ml_10 = np.argwhere(lrs[: np.argmin(losses)] > losses[ml] / 10)[0][0]
-        i = self.opt_lr_i
-        j = self.base_lr_i
-        with plt.style.context("seaborn-darkgrid"):
+        sb = n_skip_beginning
+        se = n_skip_end
+
+        with plt.style.context("classic"):
             fig, ax = plt.subplots()
-            plt.ylabel("loss")
-            plt.xlabel("learning rate (log scale)")
-            ax.plot(lrs[10:-1], losses[10:-1])
+            ax.plot(lrs[sb:-se], losses[sb:-se])
             plt.xscale("log")
-            ax.plot(
-                lrs[j],
-                losses[j],
-                markersize=10,
-                marker="o",
-                color="green",
-                label="base_lr",
-            )
-            ax.plot(
-                lrs[i],
-                losses[i],
-                markersize=10,
-                marker="o",
-                color="red",
-                label="opt_lr",
-            )
-            # ax.plot(
-            #     lrs[mg],
-            #     losses[mg],
-            #     markersize=7,
-            #     marker="o",
-            #     color="blue",
-            #     label="opt_lr_mg",
-            # )
-            # ax.plot(
-            #     lrs[ml_10],
-            #     losses[ml_10],
-            #     markersize=7,
-            #     marker="o",
-            #     color="magenta",
-            #     label="opt_lr_ml",
-            # )
-            plt.title(
-                f"Learning Rate Plot \nbase learning rate: {lrs[j]:.2E}\noptimal learning rate: {lrs[i]:.2E}"
-            )
+            plt.xlabel("Learning Rate (log scale)")
+            plt.ylabel("Loss")
+
+            # Mark base and optimal LRs
+            ax.plot(lrs[self.lr_base_i], losses[self.lr_base_i],
+                    marker="o", color="green", label="custom_lr_base")
+            ax.plot(lrs[self.lr_opt_i], losses[self.lr_opt_i],
+                    marker="o", color="red", label="custom_lr_opt")
+
+            # Mark min_loss/10 and min_gradient if available
+            if self.lr_ml_10_i is not None:
+                ax.plot(lrs[self.lr_ml_10_i], losses[self.lr_ml_10_i],
+                        marker="s", color="magenta", label="lr_min_loss_div_10")
+            if self.lr_mg_i is not None:
+                ax.plot(lrs[self.lr_mg_i], losses[self.lr_mg_i],
+                        marker="s", color="blue", label="lr_min_gradient")
+
+            title_str = f"LR Plot\nbase LR: {lrs[self.lr_base_i]:.2E}, opt LR: {lrs[self.lr_opt_i]:.2E}"
+            plt.title(title_str)
             ax.legend()
             plt.show()
+
         if save:
             plt.close()
             fig.savefig(os.path.join(self.save_dir, "lr_plot.png"))
-            logger.info("lr_plot.png successfully saved.")
-        logger.info(f"base learning rate: {lrs[j]:.2E}")
-        logger.info(f"optimal learning rate: {lrs[i]:.2E}")
-        # logger.info(f"opt_lr with minimum numerical gradient: {lrs[mg]:.2E}")
-        # logger.info(f"opt_lr with minimum loss divided by 10: {lrs[ml_10]:.2E}")
-        return
+            logger.info("lr_plot.png saved.")
 
     def lr_schedule_plot(self, save=False):
-        with plt.style.context("seaborn-darkgrid"):
+        """
+        Plot the cyclical LR schedule used during training.
+        """
+        with plt.style.context("classic"):
             fig, _ = plt.subplots()
             self.learner.plot(plot_type="lr")
             plt.title("Cyclical Learning Rate Scheduler")
@@ -431,19 +296,23 @@ class AutoEncoder:
         if save:
             plt.close()
             fig.savefig(os.path.join(self.save_dir, "lr_schedule_plot.png"))
-            logger.info("lr_schedule_plot.png successfully saved.")
-        return
+            logger.info("lr_schedule_plot.png saved.")
 
     def loss_plot(self, save=False):
-        hist_dict = self.get_history_dict()
-        hist_df = pd.DataFrame(hist_dict)
-        with plt.style.context("seaborn-darkgrid"):
+        """
+        Plot the training and validation metrics from self.hist.history.
+        """
+        hist_df = pd.DataFrame(self.hist.history)
+        if hist_df.empty:
+            logger.warning("No history data to plot.")
+            return
+
+        with plt.style.context("classic"):
             fig = hist_df.plot().get_figure()
-            plt.title("Loss Plot")
+            plt.title("Training History")
             plt.show()
+
         if save:
             plt.close()
             fig.savefig(os.path.join(self.save_dir, "loss_plot.png"))
-            logger.info("loss_plot.png successfully saved.")
-        return
-
+            logger.info("loss_plot.png saved.")

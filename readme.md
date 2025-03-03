@@ -2,12 +2,16 @@
 This project proposes an end-to-end framework for semi-supervised Anomaly Detection and Segmentation in images based on Deep Learning.
 
 ## Method Overview
-The proposed method employs a thresholded pixel-wise difference between reconstructed image and input image to localize anomaly where the threshold is determined by using a first subset of anomalous-free training images and a second subset of both anomalous-free and anomalous test images.
+The proposed method employs a thresholded pixel-wise difference between reconstructed image and input image to localize anomaly. The threshold is determined by first using a subset of anomalous-free training images, i.e validation images, to determine possible values of minimum area and threshold pairs followed by using a subset of both anomalous-free and anomalous test images to select the best pair for classification and segmentation of the remaining test images.
 
 It is inspired to a great extent by the papers [MVTec AD — A Comprehensive Real-World Dataset for Unsupervised Anomaly Detection](https://www.mvtec.com/fileadmin/Redaktion/mvtec.com/company/research/mvtec_ad.pdf) and [Improving Unsupervised Defect Segmentation by Applying Structural Similarity to Autoencoders](https://arxiv.org/abs/1807.02011).
 The method is devided in 3 steps: training, finetuning and testing.
 
 ![Image of Yaktocat](overview.png)
+
+**NOTE: Why Semi-Supervised and not Unsupervised?**
+
+The method proposed in the [MVTec paper](https://www.mvtec.com/fileadmin/Redaktion/mvtec.com/company/research/mvtec_ad.pdf) is unsupervised, as a subset containing only anomaly-free training images (validation set) are used during the validation step to determine the threshold for classification and segmentation of test images. However, the validation algorithm is based on a user input parameter, the minimum defect area, which definition remains unclear and unexplained in the aforementioned paper. Because the choice of this parameter can greatly influence the classification and segmentation results and in an effort to automate the process and remove the need for all user input, we developed a finetuning algorithm that computes different thresholds corresponding to a wide range of discrete minimum defect areas using the validation set. Subsequently, a small subset of anomaly and anomaly-free images of the test set (finetuning set) is used to select the best minimum defect area and threshold pait that will finally be used to classify and segment the remaining test images. Since our method relies on test images for finetuning, we describe it as being semi-supervised.
 
 ## Dataset
 
@@ -15,28 +19,43 @@ The proposed framework has been tested successfully on the [MVTec dataset](https
 
 ## Models
 
-There is a total of 4 models based on the Convolutional Auto-Encoder (CAE) architecture implemented in this project:
+There is a total of 5 models based on the Convolutional Auto-Encoder (CAE) architecture implemented in this project:
 * *mvtecCAE* is the model implemented in the [MVTec Paper](https://www.mvtec.com/fileadmin/Redaktion/mvtec.com/company/research/mvtec_ad.pdf)
 * *baselineCAE* is inspired by: https://github.com/natasasdj/anomalyDetection
 * *inceptionCAE* is inspired by: https://github.com/natasasdj/anomalyDetection
 * *resnetCAE* is inspired by: https://arxiv.org/pdf/1606.08921.pdf
+* *skipCAE* is inspired by: https://arxiv.org/pdf/1606.08921.pdf
 
 **NOTE:**
-The models *mvtecCAE*, *baselineCAE* and *inceptionCAE* are quite comparable in performance.
-*resnetCAE* is still being tested.
+
+*mvtecCAE*, *baselineCAE* and *inceptionCAE* are comparable in performance.
+
+**WARNING:**
+
+*resnetCAE* and *skipCAE*, are still being tested, as they are prone to overfitting, which translates in the case of convolutional auto-encoders by copying its inputs without filtering out the defective regions.
 
 ## Prerequisites
 
 ### Dependencies
-Libraries and packages used in this project: 
-* `tensorflow-gpu 2.1.0`
-* `Keras 2.3.1`
-* `ktrain 0.13.0`
-* `scikit-image 0.17.2`
-* `opencv-python 4.2.0.34`
-* `pandas 1.0.3`
-* `numpy 1.18.1`
-* `matplotlib 3.1.3`
+The main libraries used in this project with their corresponding versions are listed below: 
+* `tensorflow == 2.1.0`
+* `ktrain == 0.21.3`
+* `scikit-image == 0.16.2`
+* `scikit-learn == 0.23.2`
+
+For more information, refer to `requirement.txt`.
+
+### Installation
+Before installing dependencies, we highly recommend setting up a virtual anvironment (e.g., anaconda environment).
+
+1. Make sure pip is up-to-date with: `pip install -U pip`
+2. Install [TensorFlow 2](https://www.tensorflow.org/install) if it is not already installed (e.g., `pip install tensorflow==2.1`).
+3. Install [ktrain](https://github.com/amaiya/ktrain): `pip install ktrain`
+4. Install [scikit-image](https://scikit-image.org/): `pip install scikit-image`
+5. Install [scikit-learn](https://scikit-learn.org/stable/): `pip install scikit-learn`
+
+The above should be all you need on Linux systems and cloud computing environments like Google Colab and AWS EC2. If you are using ktrain on a Windows computer, you can follow the more detailed instructions provided [here](https://github.com/amaiya/ktrain/blob/master/FAQ.md#how-do-i-install-ktrain-on-a-windows-machine) that include some extra steps.
+
 
 
 ### Download the Dataset
@@ -118,7 +137,9 @@ Example usage:
 ```
 python3 train.py -d mvtec/capsule -a mvtecCAE -b 8 -l ssim -c grayscale
 ```
-**NOTE 1:** There is no need for the user to pass a number of epochs since the training process implements an Early Stopping strategy.
+**NOTE:** 
+
+There is no need for the user to pass a number of epochs since the training process implements an Early Stopping strategy.
 
 
 ### Finetuning (`finetune.py`)

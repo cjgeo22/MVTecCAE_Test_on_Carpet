@@ -1,63 +1,68 @@
+"""
+Preprocessing module for preparing image data for training and inference.
+Updated for Python 3.12 and modern TensorFlow.
+"""
+
 import os
-import tensorflow as tf
 from tensorflow import keras
-from keras.preprocessing.image import ImageDataGenerator
-
-
-# Data augmentation parameters (only for training)
-ROT_ANGLE = 5
-W_SHIFT_RANGE = 0.05
-H_SHIFT_RANGE = 0.05
-FILL_MODE = "nearest"
-BRIGHTNESS_RANGE = [0.95, 1.05]
-VAL_SPLIT = 0.1
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import config
 
 
 class Preprocessor:
-    def __init__(
-        self, input_directory, rescale, shape, color_mode, preprocessing_function,
-    ):
+    """
+    Class to create data generators for training, validation, testing, and finetuning.
+    """
+    def __init__(self, input_directory, rescale, shape, color_mode, preprocessing_function):
+        """
+        Initialize the Preprocessor.
+
+        Args:
+            input_directory (str): Base directory containing the dataset.
+            rescale (float): Factor to rescale pixel values.
+            shape (tuple): Target image shape (height, width).
+            color_mode (str): Color mode ("rgb" or "grayscale").
+            preprocessing_function (function): Optional preprocessing function.
+        """
         self.input_directory = input_directory
+        # Define directories for training and testing images.
         self.train_data_dir = os.path.join(input_directory, "train")
         self.test_data_dir = os.path.join(input_directory, "test")
         self.rescale = rescale
         self.shape = shape
         self.color_mode = color_mode
         self.preprocessing_function = preprocessing_function
-        self.validation_split = VAL_SPLIT
+        # Validation split parameter from configuration.
+        self.validation_split = config.VAL_SPLIT
 
         self.nb_val_images = None
         self.nb_test_images = None
 
     def get_train_generator(self, batch_size, shuffle=True):
-        # This will do preprocessing and realtime data augmentation:
+        """
+        Create a generator for training data with augmentation.
+
+        Args:
+            batch_size (int): Number of images per batch.
+            shuffle (bool): Whether to shuffle the data.
+
+        Returns:
+            train_generator: Data generator for training images.
+        """
         train_datagen = ImageDataGenerator(
-            # standarize input
             featurewise_center=False,
             featurewise_std_normalization=False,
-            # randomly rotate images in the range (degrees, 0 to 180)
-            rotation_range=ROT_ANGLE,
-            # randomly shift images horizontally (fraction of total width)
-            width_shift_range=W_SHIFT_RANGE,
-            # randomly shift images vertically (fraction of total height)
-            height_shift_range=H_SHIFT_RANGE,
-            # set mode for filling points outside the input boundaries
-            fill_mode=FILL_MODE,
-            # value used for fill_mode = "constant"
+            rotation_range=config.ROT_ANGLE,
+            width_shift_range=config.W_SHIFT_RANGE,
+            height_shift_range=config.H_SHIFT_RANGE,
+            fill_mode=config.FILL_MODE,
             cval=0.0,
-            # randomly change brightness (darker < 1 < brighter)
-            brightness_range=BRIGHTNESS_RANGE,
-            # set rescaling factor (applied before any other transformation)
+            brightness_range=config.BRIGHTNESS_RANGE,
             rescale=self.rescale,
-            # set function that will be applied on each input
             preprocessing_function=self.preprocessing_function,
-            # image data format, either "channels_first" or "channels_last"
             data_format="channels_last",
-            # fraction of images reserved for validation (strictly between 0 and 1)
             validation_split=self.validation_split,
         )
-
-        # Generate training batches with datagen.flow_from_directory()
         train_generator = train_datagen.flow_from_directory(
             directory=self.train_data_dir,
             target_size=self.shape,
@@ -65,24 +70,27 @@ class Preprocessor:
             batch_size=batch_size,
             class_mode="input",
             subset="training",
-            shuffle=True,
+            shuffle=shuffle,
         )
         return train_generator
 
     def get_val_generator(self, batch_size, shuffle=True):
         """
-        For training, pass autoencoder.batch_size as batch size.
-        For validation, pass nb_validation_images as batch size.
-        For test, pass nb_test_images as batch size.
+        Create a generator for validation data.
+
+        Args:
+            batch_size (int): Number of images per batch.
+            shuffle (bool): Whether to shuffle the data.
+
+        Returns:
+            validation_generator: Data generator for validation images.
         """
-        # For validation dataset, only rescaling
         validation_datagen = ImageDataGenerator(
             rescale=self.rescale,
             data_format="channels_last",
             validation_split=self.validation_split,
             preprocessing_function=self.preprocessing_function,
         )
-        # Generate validation batches with datagen.flow_from_directory()
         validation_generator = validation_datagen.flow_from_directory(
             directory=self.train_data_dir,
             target_size=self.shape,
@@ -96,18 +104,20 @@ class Preprocessor:
 
     def get_test_generator(self, batch_size, shuffle=False):
         """
-        For training, pass autoencoder.batch_size as batch size.
-        For validation, pass nb_validation_images as batch size.
-        For test, pass nb_test_images as batch size.
+        Create a generator for test data.
+
+        Args:
+            batch_size (int): Number of images per batch.
+            shuffle (bool): Whether to shuffle the data.
+
+        Returns:
+            test_generator: Data generator for test images.
         """
-        # For test dataset, only rescaling
         test_datagen = ImageDataGenerator(
             rescale=self.rescale,
             data_format="channels_last",
             preprocessing_function=self.preprocessing_function,
         )
-
-        # Generate validation batches with datagen.flow_from_directory()
         test_generator = test_datagen.flow_from_directory(
             directory=self.test_data_dir,
             target_size=self.shape,
@@ -120,18 +130,20 @@ class Preprocessor:
 
     def get_finetuning_generator(self, batch_size, shuffle=False):
         """
-        For training, pass autoencoder.batch_size as batch size.
-        For validation, pass nb_validation_images as batch size.
-        For test, pass nb_test_images as batch size.
+        Create a generator for finetuning data (subset of test images).
+
+        Args:
+            batch_size (int): Number of images per batch.
+            shuffle (bool): Whether to shuffle the data.
+
+        Returns:
+            finetuning_generator: Data generator for finetuning.
         """
-        # For test dataset, only rescaling
         test_datagen = ImageDataGenerator(
             rescale=self.rescale,
             data_format="channels_last",
             preprocessing_function=self.preprocessing_function,
         )
-
-        # Generate validation batches with datagen.flow_from_directory()
         finetuning_generator = test_datagen.flow_from_directory(
             directory=self.test_data_dir,
             target_size=self.shape,
@@ -143,17 +155,32 @@ class Preprocessor:
         return finetuning_generator
 
     def get_total_number_test_images(self):
+        """
+        Count the total number of test images.
+
+        Returns:
+            total_number (int): Total number of images in the test directory.
+        """
         total_number = 0
         sub_dir_names = os.listdir(self.test_data_dir)
         for sub_dir_name in sub_dir_names:
             sub_dir_path = os.path.join(self.test_data_dir, sub_dir_name)
             filenames = os.listdir(sub_dir_path)
-            number = len(filenames)
-            total_number = total_number + number
+            total_number += len(filenames)
         return total_number
 
 
 def get_preprocessing_function(architecture):
-    if architecture in ["mvtecCAE", "baselineCAE", "indexptionCAE", "resnetCAE"]:
-        preprocessing_function = None
-    return preprocessing_function
+    """
+    Return the preprocessing function based on the model architecture.
+    For mvtecCAE, no additional preprocessing is needed.
+
+    Args:
+        architecture (str): Model architecture name.
+
+    Returns:
+        preprocessing_function: None (for mvtecCAE).
+    """
+    if architecture == "mvtecCAE":
+        return None
+    return None
